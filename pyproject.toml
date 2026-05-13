@@ -36,6 +36,9 @@ packages = ["app"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "integration: tests that require local infrastructure such as Qdrant",
+]
 
 [tool.ruff]
 line-length = 100

@@ -107,6 +107,13 @@ alembic current
 pytest
 ```
 
+Run Qdrant integration tests after starting Qdrant:
+
+```bash
+docker compose up -d qdrant
+pytest -m integration
+```
+
 ## Planned next stages
 
 1. Implement document ingestion for text and PDF files.

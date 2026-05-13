@@ -47,6 +47,14 @@ class Settings(BaseSettings):
         validation_alias="EMBEDDING_MODEL_NAME",
     )
 
+    @property
+    def EMBEDDING_MODEL_NAME(self) -> str:
+        return self.embedding_model_name
+
+    @property
+    def QDRANT_COLLECTION_NAME(self) -> str:
+        return self.qdrant_collection_name
+
 
 @lru_cache
 def get_settings() -> Settings:
