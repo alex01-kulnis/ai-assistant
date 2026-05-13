@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     def QDRANT_COLLECTION_NAME(self) -> str:
         return self.qdrant_collection_name
 
+    @property
+    def OLLAMA_BASE_URL(self) -> str:
+        return self.ollama_base_url
+
+    @property
+    def OLLAMA_MODEL(self) -> str:
+        return self.ollama_model
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -7,6 +7,14 @@ from app.services.document_parser import (
     ParsedPage,
     UnsupportedDocumentTypeError,
 )
+from app.services.llm_service import (
+    OllamaConnectionError,
+    OllamaInvalidResponseError,
+    OllamaLLMError,
+    OllamaLLMService,
+    OllamaTimeoutError,
+)
+from app.services.rag_service import RAGService, RAGServiceError
 
 __all__ = [
     "Chunk",
@@ -14,8 +22,15 @@ __all__ = [
     "DocumentIngestionService",
     "DocumentParser",
     "DocumentParsingError",
+    "OllamaConnectionError",
+    "OllamaInvalidResponseError",
+    "OllamaLLMError",
+    "OllamaLLMService",
+    "OllamaTimeoutError",
     "ParsedDocument",
     "ParsedPage",
+    "RAGService",
+    "RAGServiceError",
     "TextChunkingService",
     "UnsupportedDocumentTypeError",
 ]

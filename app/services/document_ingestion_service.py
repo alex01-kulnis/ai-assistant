@@ -12,7 +12,7 @@ from app.models.document import Document, DocumentChunk
 from app.schemas.document import DocumentListItem, DocumentUploadResponse
 from app.schemas.vector import VectorChunkInput
 from app.services.chunking_service import TextChunkingService
-from app.services.document_parser import DocumentParser, DocumentParsingError
+from app.services.document_parser import DocumentParser, DocumentParsingError, ParsedDocument
 from app.services.embedding_service import EmbeddingService, get_embedding_service
 from app.vectorstore.qdrant_store import QdrantVectorStore, get_qdrant_vector_store
 
@@ -166,7 +166,7 @@ class DocumentIngestionService:
             for row in rows
         ]
 
-    def _parse_uploaded_content(self, filename: str, content: bytes):
+    def _parse_uploaded_content(self, filename: str, content: bytes) -> ParsedDocument:
         with tempfile.TemporaryDirectory() as temporary_directory:
             file_path = Path(temporary_directory) / filename
             file_path.write_bytes(content)

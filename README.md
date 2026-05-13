@@ -15,9 +15,15 @@ Current implementation includes:
 - SQLAlchemy models for documents, chunks, conversations, messages, agent runs, and tool calls
 - Alembic migration setup
 - Docker Compose services for PostgreSQL, Qdrant, and Redis
+- document parsing and text chunking services
+- embedding service based on `sentence-transformers`
+- Qdrant vector store integration
+- document upload API for synchronous indexing
+- Ollama LLM service and health endpoint
+- support agent layer with keyword intent classification and fake tools
 - basic pytest coverage for root and health endpoints
 
-Business logic is intentionally not implemented yet.
+Indexing is synchronous for now. It will move to background workers later.
 
 ## Requirements
 
@@ -81,6 +87,38 @@ Expected response:
 {"status":"ok"}
 ```
 
+## Ollama
+
+Download the local LLM model:
+
+```bash
+ollama pull qwen2.5:7b
+```
+
+Run the model:
+
+```bash
+ollama run qwen2.5:7b
+```
+
+Check that Ollama works directly:
+
+```bash
+curl http://localhost:11434/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen2.5:7b",
+    "messages": [{"role": "user", "content": "Say hello"}],
+    "stream": false
+  }'
+```
+
+Check Ollama from the FastAPI app:
+
+```bash
+curl http://localhost:8000/api/v1/llm/health
+```
+
 ## Apply database migrations
 
 Start PostgreSQL first:
@@ -101,6 +139,39 @@ Check current migration:
 alembic current
 ```
 
+## Documents API
+
+Upload a document into the knowledge base:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/documents/upload \
+  -F "file=@./example.txt"
+```
+
+List indexed documents:
+
+```bash
+curl http://localhost:8000/api/v1/documents
+```
+
+## Chat API
+
+Ask a question against the indexed knowledge base:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Как оформить возврат?"}'
+```
+
+Continue an existing conversation:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"conversation_id":"<conversation-id>","message":"Какие сроки?"}'
+```
+
 ## Run tests
 
 ```bash
@@ -116,8 +187,8 @@ pytest -m integration
 
 ## Planned next stages
 
-1. Implement document ingestion for text and PDF files.
-2. Add chunking and metadata persistence.
-3. Add embeddings with `sentence-transformers`.
-4. Store and search vectors in Qdrant.
-5. Add Ollama client and RAG agent orchestration.
+1. Move document indexing to background workers.
+2. Add Redis-backed job orchestration.
+3. Persist detailed tool calls for retrieval and LLM calls.
+4. Add richer integration tests for the full ingestion and RAG flow.
+5. Add auth and user-scoped knowledge bases.
