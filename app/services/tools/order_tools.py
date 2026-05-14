@@ -20,7 +20,7 @@ def get_refund_status(order_id: str) -> dict:
 
 
 def create_support_ticket(reason: str, user_message: str) -> dict:
-    ticket_hash = hashlib.sha1(f"{reason}:{user_message}".encode("utf-8")).hexdigest()[:10]
+    ticket_hash = hashlib.sha1(f"{reason}:{user_message}".encode()).hexdigest()[:10]
     return {
         "ticket_id": f"TICKET-{ticket_hash.upper()}",
         "reason": reason,

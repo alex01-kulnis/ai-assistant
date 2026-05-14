@@ -203,10 +203,12 @@ class RAGService:
         context_parts: list[str] = []
         for index, chunk in enumerate(retrieved_chunks, start=1):
             page_label = chunk.page_number if chunk.page_number is not None else "n/a"
-            context_parts.append(
-                f"[Source {index}] filename={chunk.filename}; document_id={chunk.document_id}; "
-                f"page={page_label}; chunk_index={chunk.chunk_index}; score={chunk.score:.4f}\n{chunk.text}"
+            source_header = (
+                f"[Source {index}] filename={chunk.filename}; "
+                f"document_id={chunk.document_id}; page={page_label}; "
+                f"chunk_index={chunk.chunk_index}; score={chunk.score:.4f}"
             )
+            context_parts.append(f"{source_header}\n{chunk.text}")
 
         return "\n\n".join(context_parts)
 

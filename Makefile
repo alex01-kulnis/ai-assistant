@@ -1,0 +1,21 @@
+PYTHON ?= .venv/bin/python
+
+.PHONY: dev docker-up docker-down migrate test lint
+
+dev:
+	$(PYTHON) -m uvicorn app.main:app --reload
+
+docker-up:
+	docker compose up -d
+
+docker-down:
+	docker compose down
+
+migrate:
+	$(PYTHON) -m alembic upgrade head
+
+test:
+	$(PYTHON) -m pytest
+
+lint:
+	$(PYTHON) -m ruff check app tests

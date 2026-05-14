@@ -310,18 +310,12 @@ class SupportAgent:
         context_parts: list[str] = []
         for index, chunk in enumerate(retrieved_chunks, start=1):
             page_label = chunk.page_number if chunk.page_number is not None else "n/a"
-            context_parts.append(
-                "[Source {index}] filename={filename}; document_id={document_id}; "
-                "page={page}; chunk_index={chunk_index}; score={score:.4f}\n{text}".format(
-                    index=index,
-                    filename=chunk.filename,
-                    document_id=chunk.document_id,
-                    page=page_label,
-                    chunk_index=chunk.chunk_index,
-                    score=chunk.score,
-                    text=chunk.text,
-                )
+            source_header = (
+                f"[Source {index}] filename={chunk.filename}; "
+                f"document_id={chunk.document_id}; page={page_label}; "
+                f"chunk_index={chunk.chunk_index}; score={chunk.score:.4f}"
             )
+            context_parts.append(f"{source_header}\n{chunk.text}")
 
         return "\n\n".join(context_parts)
 
@@ -330,11 +324,7 @@ class SupportAgent:
             return "No tools were called."
 
         return "\n".join(
-            "{tool_name}: input={tool_input}; output={tool_output}".format(
-                tool_name=tool_call.tool_name,
-                tool_input=tool_call.input_json,
-                tool_output=tool_call.output_json,
-            )
+            f"{tool_call.tool_name}: input={tool_call.input_json}; output={tool_call.output_json}"
             for tool_call in tool_calls
         )
 
@@ -348,10 +338,7 @@ class SupportAgent:
         if intent != "payment_issue" or not self._is_context_insufficient(retrieved_chunks):
             return answer
 
-        recommendation = (
-            "Если вопрос с оплатой не решится, "
-            "создайте обращение в поддержку."
-        )
+        recommendation = "Если вопрос с оплатой не решится, создайте обращение в поддержку."
         if recommendation.casefold() in answer.casefold():
             return answer
         return f"{answer}\n\n{recommendation}"
