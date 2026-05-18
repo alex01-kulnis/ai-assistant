@@ -19,7 +19,10 @@ class QdrantVectorStore:
         vector_size: int = 384,
     ) -> None:
         settings = get_settings()
-        self.client = client or QdrantClient(url=settings.qdrant_url)
+        self.client = client or QdrantClient(
+            url=settings.qdrant_url,
+            check_compatibility=False,
+        )
         self.collection_name = collection_name or settings.QDRANT_COLLECTION_NAME
         self.vector_size = vector_size
 

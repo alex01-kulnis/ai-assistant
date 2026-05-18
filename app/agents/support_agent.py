@@ -22,13 +22,18 @@ logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = (
-    "Ты AI support agent. "
-    "Отвечай пользователю только на основе контекста. "
-    "Если в контексте нет ответа, честно скажи, "
-    "что информации недостаточно. "
+    "Ты AI support agent. Отвечай как сотрудник поддержки: "
+    "понятно, спокойно и по делу. "
+    "Используй только предоставленный CONTEXT. "
+    "Если в CONTEXT нет ответа, честно скажи: "
+    "\"В базе знаний недостаточно информации для ответа на этот вопрос.\" "
     "Не придумывай факты. "
-    "Отвечай на русском языке, "
-    "если пользователь пишет на русском."
+    "Не упоминай внутренние названия файлов, chunk_id, Qdrant, "
+    "embeddings или технические детали. "
+    "Не пиши фразы вроде \"информация взята из файла\". "
+    "Не добавляй раздел \"Источники\" в текст ответа - "
+    "источники будут добавлены приложением отдельно. "
+    "Если пользователь пишет на русском, отвечай на русском."
 )
 
 
@@ -81,25 +86,29 @@ class SupportAgent:
         message: str,
         session: AsyncSession,
     ) -> ChatResponse:
-        conversation = await self._get_or_create_conversation(
-            session=session,
-            conversation_id=conversation_id,
-        )
-        user_message = Message(
-            id=uuid.uuid4(),
-            conversation_id=conversation.id,
-            role="user",
-            content=message,
-        )
-        session.add(user_message)
-        await session.commit()
-
         started_at = time.perf_counter()
         intent = self.classify_intent(message)
+        conversation: Conversation | None = None
+        user_message: Message | None = None
+        user_message_persisted = False
         retrieved_chunks: list[RetrievedChunk] = []
         tool_calls: list[PendingToolCall] = []
 
         try:
+            conversation = await self._get_or_create_conversation(
+                session=session,
+                conversation_id=conversation_id,
+            )
+            user_message = Message(
+                id=uuid.uuid4(),
+                conversation_id=conversation.id,
+                role="user",
+                content=message,
+            )
+            session.add(user_message)
+            await session.commit()
+            user_message_persisted = True
+
             query_vector = self.embedding_service.embed_query(message)
             retrieved_chunks = self.vector_store.search(
                 query_vector=query_vector,
@@ -146,11 +155,17 @@ class SupportAgent:
                 answer=answer,
                 sources=self._build_sources(retrieved_chunks),
             )
+        except SupportAgentError:
+            raise
         except OllamaLLMError as exc:
-            await self._save_failed_agent_run(
+            await self._try_save_failed_agent_run(
                 session=session,
-                conversation_id=conversation.id,
-                user_message_id=user_message.id,
+                conversation_id=(
+                    conversation.id if user_message_persisted and conversation else None
+                ),
+                user_message_id=(
+                    user_message.id if user_message_persisted and user_message else None
+                ),
                 intent=intent,
                 retrieved_chunks_count=len(retrieved_chunks),
                 tool_calls=tool_calls,
@@ -158,16 +173,28 @@ class SupportAgent:
             )
             raise SupportAgentError(f"LLM request failed: {exc}", status_code=502) from exc
         except Exception as exc:
-            logger.exception("Support agent failed for conversation_id=%s", conversation.id)
-            await self._save_failed_agent_run(
+            logger.exception(
+                "Support agent failed for conversation_id=%s",
+                conversation.id if conversation is not None else conversation_id,
+            )
+            await self._try_save_failed_agent_run(
                 session=session,
-                conversation_id=conversation.id,
-                user_message_id=user_message.id,
+                conversation_id=(
+                    conversation.id if user_message_persisted and conversation else None
+                ),
+                user_message_id=(
+                    user_message.id if user_message_persisted and user_message else None
+                ),
                 intent=intent,
                 retrieved_chunks_count=len(retrieved_chunks),
                 tool_calls=tool_calls,
                 started_at=started_at,
             )
+            if not user_message_persisted:
+                raise SupportAgentError(
+                    "Database is unavailable. Check PostgreSQL.",
+                    status_code=503,
+                ) from exc
             raise SupportAgentError("Failed to generate chat response.", status_code=500) from exc
 
     def classify_intent(self, message: str) -> str:
@@ -254,6 +281,35 @@ class SupportAgent:
         session.add_all(self._build_tool_call_models(agent_run.id, tool_calls))
         await session.commit()
 
+    async def _try_save_failed_agent_run(
+        self,
+        *,
+        session: AsyncSession,
+        conversation_id: uuid.UUID | None,
+        user_message_id: uuid.UUID | None,
+        intent: str,
+        retrieved_chunks_count: int,
+        tool_calls: list[PendingToolCall],
+        started_at: float,
+    ) -> None:
+        if conversation_id is None or user_message_id is None:
+            await session.rollback()
+            return
+
+        try:
+            await self._save_failed_agent_run(
+                session=session,
+                conversation_id=conversation_id,
+                user_message_id=user_message_id,
+                intent=intent,
+                retrieved_chunks_count=retrieved_chunks_count,
+                tool_calls=tool_calls,
+                started_at=started_at,
+            )
+        except Exception:
+            logger.exception("Failed to save failed agent run")
+            await session.rollback()
+
     def _build_tool_call_models(
         self,
         agent_run_id: uuid.UUID,
@@ -293,9 +349,11 @@ class SupportAgent:
             f"USER QUESTION:\n{question}\n\n"
             "INSTRUCTIONS:\n"
             "- Answer using only CONTEXT and TOOL RESULTS.\n"
-            "- If context is insufficient, say that there is not enough information.\n"
+            "- If context is insufficient, answer exactly: "
+            "В базе знаний недостаточно информации для ответа на этот вопрос.\n"
             "- Be concise and helpful.\n"
-            "- Mention source filenames if useful."
+            "- Do not mention filenames, chunk_id, Qdrant, embeddings, or technical details.\n"
+            "- Do not add a Sources section."
             f"{payment_instruction}"
         )
         return [
@@ -310,12 +368,7 @@ class SupportAgent:
         context_parts: list[str] = []
         for index, chunk in enumerate(retrieved_chunks, start=1):
             page_label = chunk.page_number if chunk.page_number is not None else "n/a"
-            source_header = (
-                f"[Source {index}] filename={chunk.filename}; "
-                f"document_id={chunk.document_id}; page={page_label}; "
-                f"chunk_index={chunk.chunk_index}; score={chunk.score:.4f}"
-            )
-            context_parts.append(f"{source_header}\n{chunk.text}")
+            context_parts.append(f"[Context fragment {index}, page={page_label}]\n{chunk.text}")
 
         return "\n\n".join(context_parts)
 

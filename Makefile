@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: dev docker-up docker-down migrate test lint
+.PHONY: dev docker-up docker-down migrate test lint telegram-bot
 
 dev:
 	$(PYTHON) -m uvicorn app.main:app --reload
@@ -19,3 +19,6 @@ test:
 
 lint:
 	$(PYTHON) -m ruff check app tests
+
+telegram-bot:
+	$(PYTHON) scripts/run_telegram_bot.py

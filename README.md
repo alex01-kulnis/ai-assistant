@@ -20,6 +20,7 @@ The MVP intentionally avoids LangChain so the core RAG and agent architecture st
 - Local LLM calls through Ollama `qwen2.5:7b`.
 - Document upload and synchronous indexing.
 - RAG chat endpoint with sources.
+- Telegram bot integration for local chat testing.
 - Simple support agent layer with keyword intent classification.
 - Fake tools with persisted `ToolCall` records.
 - Basic unit and integration test structure.
@@ -36,6 +37,7 @@ The MVP intentionally avoids LangChain so the core RAG and agent architecture st
 - Redis
 - Docker Compose
 - Ollama
+- aiogram 3
 - `sentence-transformers`
 - PyMuPDF
 - httpx
@@ -116,6 +118,7 @@ cp .env.example .env
 Important defaults:
 
 ```env
+DATABASE_URL=postgresql+asyncpg://supportops:supportops@localhost:5433/supportops
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:7b
 EMBEDDING_MODEL_NAME=intfloat/multilingual-e5-small
@@ -124,7 +127,8 @@ QDRANT_COLLECTION_NAME=support_knowledge_base
 
 ## Docker
 
-Start PostgreSQL, Qdrant, and Redis:
+Start PostgreSQL, Qdrant, and Redis. PostgreSQL is exposed on `localhost:5433` by default
+to avoid conflicts with a locally installed PostgreSQL on `5432`.
 
 ```bash
 make docker-up
@@ -212,6 +216,74 @@ Useful URLs:
 - Health check: http://localhost:8000/health
 - OpenAPI docs: http://localhost:8000/docs
 - LLM health: http://localhost:8000/api/v1/llm/health
+
+## Telegram Bot
+
+The Telegram bot is a separate long-polling process for local development. It is not started by
+FastAPI and it does not use webhooks yet.
+
+Create a bot:
+
+1. Open Telegram and message `@BotFather`.
+2. Run `/newbot`.
+3. Copy the bot token.
+4. Do not commit the token.
+
+Add Telegram settings to `.env`:
+
+```env
+TELEGRAM_BOT_TOKEN=<your-bot-token>
+TELEGRAM_ALLOWED_USER_IDS=123456,789012
+TELEGRAM_USE_BACKEND_HTTP=true
+TELEGRAM_BACKEND_CHAT_URL=http://localhost:8000/api/v1/chat
+```
+
+`TELEGRAM_ALLOWED_USER_IDS` is optional. If it is empty, every Telegram user can use the bot.
+When it is set, only listed numeric Telegram user IDs are allowed.
+
+For the most stable local setup, run the FastAPI backend and let the bot call `/api/v1/chat`
+over HTTP:
+
+```bash
+make dev
+```
+
+Start the bot in another terminal:
+
+```bash
+make telegram-bot
+```
+
+Equivalent command:
+
+```bash
+python scripts/run_telegram_bot.py
+```
+
+Bot commands:
+
+- `/start` - intro message
+- `/help` - commands and example questions
+- `/new` - reset current conversation for this Telegram user
+- `/sources` - show sources from the last answer
+
+Manual test flow:
+
+1. Send `/start`.
+2. Ask: `Как оформить возврат?`
+3. Send `/sources`.
+4. Send `/new` to start a fresh conversation.
+
+If `TELEGRAM_USE_BACKEND_HTTP=false`, the bot uses `SupportAgent` directly inside the bot
+process. This is useful for experiments, but HTTP mode is simpler for local debugging because it
+keeps the bot and FastAPI backend separated.
+
+Telegram troubleshooting:
+
+- `Backend сейчас недоступен. Проверь, что FastAPI запущен.` means start the backend with
+  `make dev` and check `http://localhost:8000/health`.
+- `LLM сейчас недоступна. Проверь Ollama.` means start Ollama and verify
+  `ollama run qwen2.5:7b` or `GET /api/v1/llm/health`.
 
 ## Upload Document
 
@@ -325,6 +397,7 @@ make docker-down  # stop Docker Compose services
 make migrate      # apply Alembic migrations
 make test         # run pytest
 make lint         # run ruff
+make telegram-bot # run Telegram long-polling bot
 ```
 
 ## Architecture Decisions

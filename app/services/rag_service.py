@@ -18,13 +18,18 @@ logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = (
-    "Ты AI support agent. "
-    "Отвечай пользователю только на основе контекста. "
-    "Если в контексте нет ответа, честно скажи, "
-    "что информации недостаточно. "
+    "Ты AI support agent. Отвечай как сотрудник поддержки: "
+    "понятно, спокойно и по делу. "
+    "Используй только предоставленный CONTEXT. "
+    "Если в CONTEXT нет ответа, честно скажи: "
+    "\"В базе знаний недостаточно информации для ответа на этот вопрос.\" "
     "Не придумывай факты. "
-    "Отвечай на русском языке, "
-    "если пользователь пишет на русском."
+    "Не упоминай внутренние названия файлов, chunk_id, Qdrant, "
+    "embeddings или технические детали. "
+    "Не пиши фразы вроде \"информация взята из файла\". "
+    "Не добавляй раздел \"Источники\" в текст ответа - "
+    "источники будут добавлены приложением отдельно. "
+    "Если пользователь пишет на русском, отвечай на русском."
 )
 
 
@@ -187,9 +192,11 @@ class RAGService:
             f"USER QUESTION:\n{question}\n\n"
             "INSTRUCTIONS:\n"
             "- Answer using only CONTEXT.\n"
-            "- If context is insufficient, say that there is not enough information.\n"
+            "- If context is insufficient, answer exactly: "
+            "В базе знаний недостаточно информации для ответа на этот вопрос.\n"
             "- Be concise and helpful.\n"
-            "- Mention source filenames if useful."
+            "- Do not mention filenames, chunk_id, Qdrant, embeddings, or technical details.\n"
+            "- Do not add a Sources section."
         )
         return [
             {"role": "system", "content": SYSTEM_PROMPT},

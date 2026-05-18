@@ -15,7 +15,7 @@ from app.vectorstore.qdrant_store import QdrantVectorStore  # noqa: E402
 def test_qdrant_upsert_and_search_finds_chunk() -> None:
     settings = get_settings()
     collection_name = f"{settings.QDRANT_COLLECTION_NAME}_test_{uuid.uuid4().hex}"
-    client = QdrantClient(url=settings.qdrant_url, timeout=5)
+    client = QdrantClient(url=settings.qdrant_url, timeout=5, check_compatibility=False)
     store = QdrantVectorStore(client=client, collection_name=collection_name)
 
     try:

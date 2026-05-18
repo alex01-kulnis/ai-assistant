@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     )
     postgres_db: str = Field(default="supportops", validation_alias="POSTGRES_DB")
     database_url: str = Field(
-        default="postgresql+asyncpg://supportops:supportops@localhost:5432/supportops",
+        default="postgresql+asyncpg://supportops:supportops@localhost:5433/supportops",
         validation_alias="DATABASE_URL",
     )
 
@@ -46,6 +46,19 @@ class Settings(BaseSettings):
         default="intfloat/multilingual-e5-small",
         validation_alias="EMBEDDING_MODEL_NAME",
     )
+    telegram_bot_token: str | None = Field(default=None, validation_alias="TELEGRAM_BOT_TOKEN")
+    telegram_allowed_user_ids: str | None = Field(
+        default=None,
+        validation_alias="TELEGRAM_ALLOWED_USER_IDS",
+    )
+    telegram_use_backend_http: bool = Field(
+        default=False,
+        validation_alias="TELEGRAM_USE_BACKEND_HTTP",
+    )
+    telegram_backend_chat_url: str = Field(
+        default="http://localhost:8000/api/v1/chat",
+        validation_alias="TELEGRAM_BACKEND_CHAT_URL",
+    )
 
     @property
     def EMBEDDING_MODEL_NAME(self) -> str:
@@ -62,6 +75,22 @@ class Settings(BaseSettings):
     @property
     def OLLAMA_MODEL(self) -> str:
         return self.ollama_model
+
+    @property
+    def TELEGRAM_BOT_TOKEN(self) -> str | None:
+        return self.telegram_bot_token
+
+    @property
+    def TELEGRAM_ALLOWED_USER_IDS(self) -> str | None:
+        return self.telegram_allowed_user_ids
+
+    @property
+    def TELEGRAM_USE_BACKEND_HTTP(self) -> bool:
+        return self.telegram_use_backend_http
+
+    @property
+    def TELEGRAM_BACKEND_CHAT_URL(self) -> str:
+        return self.telegram_backend_chat_url
 
 
 @lru_cache
