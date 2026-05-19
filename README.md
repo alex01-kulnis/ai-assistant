@@ -9,6 +9,9 @@ Ollama LLM using retrieved context.
 
 The MVP intentionally avoids LangChain so the core RAG and agent architecture stays explicit.
 
+Detailed architecture and runtime flow notes are in
+[`docs/PROJECT_FLOW.md`](docs/PROJECT_FLOW.md).
+
 ## Features
 
 - Async FastAPI application.
