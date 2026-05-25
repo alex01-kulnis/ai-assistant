@@ -30,7 +30,8 @@ SupportOps AI Agent - backend для support-бота с private knowledge base.
 8. Сохраняет assistant message, agent run и tool calls.
 9. Возвращает answer и sources отдельно.
 
-LangChain намеренно не используется на MVP-этапе, чтобы архитектура RAG была видна явно.
+Основной MVP-flow реализован вручную, чтобы архитектура RAG была видна явно. Рядом добавлен
+параллельный LangChain-based flow для сравнения на тех же документах и вопросах.
 
 ## 2. Технологический стек
 
@@ -90,6 +91,7 @@ tests/                      unit и integration tests
 | ORM модели agent runs и tool calls | `app/models/agent.py` |
 | Upload/list documents API | `app/api/routes/documents.py` |
 | Chat API | `app/api/routes/chat.py` |
+| LangChain Chat API | `app/api/routes/chat_langchain.py` |
 | LLM health API | `app/api/routes/llm.py` |
 | Индексация документа | `app/services/document_ingestion_service.py` |
 | Парсинг txt/md/pdf | `app/services/document_parser.py` |
@@ -98,6 +100,8 @@ tests/                      unit и integration tests
 | Qdrant | `app/vectorstore/qdrant_store.py` |
 | Ollama client | `app/services/llm_service.py` |
 | Основной support agent | `app/agents/support_agent.py` |
+| LangChain support agent | `app/agents/langchain_support_agent.py` |
+| LangChain RAG service | `app/services/langchain_rag_service.py` |
 | Fake tools | `app/services/tools/order_tools.py` |
 | Telegram bot startup | `scripts/run_telegram_bot.py` |
 | Telegram handlers | `app/integrations/telegram/handlers.py` |
@@ -480,6 +484,45 @@ Response:
   ]
 }
 ```
+
+## 10.1. Flow LangChain chat request
+
+Endpoint:
+
+```text
+POST /api/v1/chat/langchain
+```
+
+Route:
+
+```text
+app/api/routes/chat_langchain.py
+```
+
+Главная логика:
+
+```text
+app/agents/langchain_support_agent.py
+app/services/langchain_rag_service.py
+```
+
+Этот endpoint возвращает тот же `ChatResponse`, что и ручной `/api/v1/chat`, но retrieval и
+generation внутри RAG части проходят через LangChain integrations:
+
+1. `LangChainSupportAgent` создает или продолжает `Conversation`.
+2. User message сохраняется в `messages`.
+3. Intent определяется теми же keyword-based правилами.
+4. Fake tools вызываются тем же образом, что и в ручном agent.
+5. `LangChainRAGService` использует `langchain-qdrant` для поиска по той же Qdrant collection.
+6. Для совместимости с текущими points используется `content_payload_key="text"`.
+7. Так как существующий Qdrant payload хранит metadata flat-структурой, service подтягивает
+   исходный payload по point id и собирает `sources`.
+8. Prompt строится через `ChatPromptTemplate`.
+9. Ответ генерируется через `ChatOllama`.
+10. Assistant message, `AgentRun` и `ToolCall` сохраняются в PostgreSQL.
+
+Этот flow нужен для сравнения ручного RAG и LangChain RAG на одинаковых документах и вопросах.
+Telegram bot продолжает использовать обычный `/api/v1/chat`.
 
 ## 11. Intent classification
 

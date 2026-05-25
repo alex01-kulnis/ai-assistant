@@ -7,7 +7,8 @@ Users upload `.txt`, `.md`, or `.pdf` documents. The system parses them, chunks 
 creates local embeddings, stores vectors in Qdrant, and answers questions through a local
 Ollama LLM using retrieved context.
 
-The MVP intentionally avoids LangChain so the core RAG and agent architecture stays explicit.
+The primary MVP RAG flow is implemented manually so the core architecture stays explicit.
+A parallel LangChain-based endpoint is available for comparison without changing the manual flow.
 
 Detailed architecture and runtime flow notes are in
 [`docs/PROJECT_FLOW.md`](docs/PROJECT_FLOW.md).
@@ -23,6 +24,7 @@ Detailed architecture and runtime flow notes are in
 - Local LLM calls through Ollama `qwen2.5:7b`.
 - Document upload and synchronous indexing.
 - RAG chat endpoint with sources.
+- Parallel LangChain RAG chat endpoint for side-by-side comparison.
 - Telegram bot integration for local chat testing.
 - Simple support agent layer with keyword intent classification.
 - Fake tools with persisted `ToolCall` records.
@@ -41,6 +43,7 @@ Detailed architecture and runtime flow notes are in
 - Docker Compose
 - Ollama
 - aiogram 3
+- LangChain
 - `sentence-transformers`
 - PyMuPDF
 - httpx
@@ -98,6 +101,22 @@ flowchart LR
     E --> G["Prompt context"]
     F --> G
     G --> H["Ollama qwen2.5:7b"]
+    H --> I["Answer + sources"]
+    B --> J["Conversation, Message, AgentRun, ToolCall"]
+```
+
+### LangChain Chat
+
+```mermaid
+flowchart LR
+    A["POST /api/v1/chat/langchain"] --> B["LangChainSupportAgent"]
+    B --> C["Intent classification"]
+    C --> D["LangChainRAGService"]
+    D --> E["langchain-qdrant similarity search"]
+    C --> F["Optional fake tool"]
+    E --> G["LangChain prompt"]
+    F --> G
+    G --> H["ChatOllama qwen2.5:7b"]
     H --> I["Answer + sources"]
     B --> J["Conversation, Message, AgentRun, ToolCall"]
 ```
@@ -337,6 +356,16 @@ curl -X POST http://localhost:8000/api/v1/chat \
   -d '{"message":"Как оформить возврат?"}'
 ```
 
+Compare the same question through the LangChain implementation:
+
+Endpoint: `POST /api/v1/chat/langchain`
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat/langchain \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Как оформить возврат?"}'
+```
+
 Continue an existing conversation:
 
 ```bash
@@ -422,12 +451,16 @@ vector index rebuilds.
 Ollama makes the LLM fully local for development. It avoids external API keys, keeps the project
 easy to demo offline, and allows experimentation with `qwen2.5:7b` through a simple HTTP API.
 
-### Why No LangChain In The MVP
+### Why Manual RAG First, Then LangChain
 
-The MVP avoids LangChain to make the architecture explicit: parsing, chunking, embedding,
-retrieval, prompting, tool calls, and persistence are implemented directly. This makes the project
-better for learning and easier to debug. A framework can be introduced later if it removes real
-complexity.
+The default `/api/v1/chat` flow stays manual: parsing, chunking, embedding, retrieval, prompting,
+tool calls, and persistence are implemented directly. This makes the project better for learning
+and easier to debug.
+
+The `/api/v1/chat/langchain` flow adds LangChain next to the manual implementation, using
+`langchain-qdrant` and `ChatOllama` over the same Qdrant collection. This makes it possible to
+compare framework-assisted RAG and hand-written RAG on identical questions without changing the
+Telegram bot or the existing API contract.
 
 ## Roadmap
 

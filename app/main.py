@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.api.routes.chat import router as chat_router
+from app.api.routes.chat_langchain import router as chat_langchain_router
 from app.api.routes.documents import router as documents_router
 from app.api.routes.health import router as health_router
 from app.api.routes.llm import router as llm_router
@@ -21,6 +22,7 @@ def create_app() -> FastAPI:
     app.include_router(documents_router)
     app.include_router(llm_router)
     app.include_router(chat_router)
+    app.include_router(chat_langchain_router)
 
     @app.get("/")
     async def root() -> dict[str, str]:
