@@ -6,15 +6,18 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Protocol
 
+from opentelemetry import trace
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 
 from app.agents.support_agent import SYSTEM_PROMPT
 from app.core.config import get_settings
+from app.core.tracing import set_span_attributes
 from app.schemas.vector import RetrievedChunk
 from app.services.embedding_service import EmbeddingService, get_embedding_service
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 class LangChainRAGError(RuntimeError):
@@ -72,40 +75,69 @@ class LangChainRAGService:
         intent: str,
         tool_results: str,
     ) -> LangChainRAGResult:
-        retrieved_chunks = await self.retrieve(question)
-        messages = self._build_prompt_messages(
-            question=question,
-            intent=intent,
-            retrieved_chunks=retrieved_chunks,
-            tool_results=tool_results,
-        )
-        answer = await self._generate(messages)
+        with tracer.start_as_current_span("langchain_rag.answer") as span:
+            set_span_attributes(
+                span,
+                {
+                    "intent": intent,
+                    "message_length": len(question),
+                    "model_name": self.model_name,
+                    "retrieval_limit": self.retrieval_limit,
+                },
+            )
+            retrieved_chunks = await self.retrieve(question)
+            messages = self._build_prompt_messages(
+                question=question,
+                intent=intent,
+                retrieved_chunks=retrieved_chunks,
+                tool_results=tool_results,
+            )
+            answer = await self._generate(messages)
+            set_span_attributes(
+                span,
+                {
+                    "retrieved_chunks_count": len(retrieved_chunks),
+                    "top_score": max((chunk.score for chunk in retrieved_chunks), default=None),
+                },
+            )
 
-        return LangChainRAGResult(
-            answer=answer,
-            retrieved_chunks=retrieved_chunks,
-        )
+            return LangChainRAGResult(
+                answer=answer,
+                retrieved_chunks=retrieved_chunks,
+            )
 
     async def retrieve(self, question: str) -> list[RetrievedChunk]:
-        try:
-            async_search = getattr(self.vector_store, "asimilarity_search_with_score", None)
-            if async_search is None:
-                search_results = self.vector_store.similarity_search_with_score(
-                    question,
-                    k=self.retrieval_limit,
-                )
-            else:
-                maybe_results = async_search(question, k=self.retrieval_limit)
-                search_results = (
-                    await maybe_results if inspect.isawaitable(maybe_results) else maybe_results
-                )
-        except Exception as exc:
-            raise LangChainRAGRetrievalError("LangChain Qdrant retrieval failed.") from exc
+        with tracer.start_as_current_span("langchain_rag.retrieve") as span:
+            set_span_attributes(span, {"retrieval_limit": self.retrieval_limit})
+            try:
+                async_search = getattr(self.vector_store, "asimilarity_search_with_score", None)
+                if async_search is None:
+                    search_results = self.vector_store.similarity_search_with_score(
+                        question,
+                        k=self.retrieval_limit,
+                    )
+                else:
+                    maybe_results = async_search(question, k=self.retrieval_limit)
+                    search_results = (
+                        await maybe_results
+                        if inspect.isawaitable(maybe_results)
+                        else maybe_results
+                    )
+            except Exception as exc:
+                raise LangChainRAGRetrievalError("LangChain Qdrant retrieval failed.") from exc
 
-        return [
-            self._to_retrieved_chunk(document=document, score=score)
-            for document, score in search_results
-        ]
+            retrieved_chunks = [
+                self._to_retrieved_chunk(document=document, score=score)
+                for document, score in search_results
+            ]
+            set_span_attributes(
+                span,
+                {
+                    "retrieved_chunks_count": len(retrieved_chunks),
+                    "top_score": max((chunk.score for chunk in retrieved_chunks), default=None),
+                },
+            )
+            return retrieved_chunks
 
     @property
     def vector_store(self) -> SimilaritySearchWithScore:
@@ -149,7 +181,6 @@ class LangChainRAGService:
                 return embedding_service.embed_documents(texts)
 
             def embed_query(self, text: str) -> list[float]:
-
                 return embedding_service.embed_query(text)
 
         return E5SentenceTransformerEmbeddings()
@@ -183,51 +214,63 @@ class LangChainRAGService:
         retrieved_chunks: list[RetrievedChunk],
         tool_results: str,
     ) -> Any:
-        from langchain_core.prompts import ChatPromptTemplate
+        with tracer.start_as_current_span("langchain_rag.build_prompt") as span:
+            from langchain_core.prompts import ChatPromptTemplate
 
-        user_prompt = (
-            "INTENT:\n{intent}\n\n"
-            "CONTEXT:\n{context}\n\n"
-            "TOOL RESULTS:\n{tool_results}\n\n"
-            "USER QUESTION:\n{question}\n\n"
-            "INSTRUCTIONS:\n"
-            "- Answer using only CONTEXT and TOOL RESULTS.\n"
-            "- If context is insufficient, answer exactly: "
-            "В базе знаний недостаточно информации для ответа на этот вопрос.\n"
-            "- Be concise and helpful.\n"
-            "- Do not mention filenames, chunk_id, Qdrant, embeddings, or technical details.\n"
-            "- Do not add a Sources section."
-        )
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", SYSTEM_PROMPT),
-                ("human", user_prompt),
-            ]
-        )
-        return prompt.format_messages(
-            intent=intent,
-            context=self._build_context(retrieved_chunks),
-            tool_results=tool_results,
-            question=question,
-        )
+            set_span_attributes(
+                span,
+                {
+                    "intent": intent,
+                    "retrieved_chunks_count": len(retrieved_chunks),
+                    "message_length": len(question),
+                },
+            )
+            user_prompt = (
+                "INTENT:\n{intent}\n\n"
+                "CONTEXT:\n{context}\n\n"
+                "TOOL RESULTS:\n{tool_results}\n\n"
+                "USER QUESTION:\n{question}\n\n"
+                "INSTRUCTIONS:\n"
+                "- Answer using only CONTEXT and TOOL RESULTS.\n"
+                "- If context is insufficient, answer exactly: "
+                "В базе знаний недостаточно информации для ответа на этот вопрос.\n"
+                "- Be concise and helpful.\n"
+                "- Do not mention filenames, chunk_id, Qdrant, embeddings, or technical details.\n"
+                "- Do not add a Sources section."
+            )
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    ("system", SYSTEM_PROMPT),
+                    ("human", user_prompt),
+                ]
+            )
+            return prompt.format_messages(
+                intent=intent,
+                context=self._build_context(retrieved_chunks),
+                tool_results=tool_results,
+                question=question,
+            )
 
     async def _generate(self, messages: Any) -> str:
-        try:
-            response = await self.llm.ainvoke(messages)
-        except Exception as exc:
-            raise LangChainRAGGenerationError("LangChain Ollama generation failed.") from exc
+        with tracer.start_as_current_span("langchain_rag.generate") as span:
+            set_span_attributes(span, {"model_name": self.model_name})
+            try:
+                response = await self.llm.ainvoke(messages)
+            except Exception as exc:
+                raise LangChainRAGGenerationError(
+                    "LangChain Ollama generation failed."
+                ) from exc
 
-        content = getattr(response, "content", response)
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return "".join(self._stringify_content_part(part) for part in content).strip()
+            content = getattr(response, "content", response)
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "".join(self._stringify_content_part(part) for part in content).strip()
 
-        raise LangChainRAGGenerationError("LangChain LLM returned unsupported content.")
+            raise LangChainRAGGenerationError("LangChain LLM returned unsupported content.")
 
     def _to_retrieved_chunk(self, *, document: Any, score: float) -> RetrievedChunk:
         metadata = dict(getattr(document, "metadata", {}) or {})
-        print("metadata", metadata)
         point_id = str(
             metadata.get("point_id")
             or metadata.get("_id")
@@ -236,7 +279,6 @@ class LangChainRAGService:
             or ""
         )
         payload = self._payload_from_metadata(metadata=metadata, point_id=point_id)
-        print("payload", payload)
         page_content = getattr(document, "page_content", "") or payload.get("text", "")
 
         return RetrievedChunk(

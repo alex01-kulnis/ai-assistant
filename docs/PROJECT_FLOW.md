@@ -524,6 +524,73 @@ generation внутри RAG части проходят через LangChain int
 Этот flow нужен для сравнения ручного RAG и LangChain RAG на одинаковых документах и вопросах.
 Telegram bot продолжает использовать обычный `/api/v1/chat`.
 
+## 10.2. Document lifecycle
+
+Удаление документа:
+
+```text
+DELETE /api/v1/documents/{document_id}
+```
+
+Flow:
+
+1. `DocumentIngestionService.delete_document()` валидирует `document_id` как UUID.
+2. Загружает `Document` из PostgreSQL.
+3. Загружает все `DocumentChunk` для документа.
+4. Удаляет Qdrant points сначала по сохраненным `qdrant_point_id`.
+5. Дополнительно удаляет Qdrant points по payload filter `document_id`, чтобы убрать stale vectors.
+6. Удаляет `document_chunks` из PostgreSQL.
+7. Удаляет `documents` row из PostgreSQL.
+8. Возвращает `DocumentDeleteResponse`.
+
+Если Qdrant delete падает, PostgreSQL rows не удаляются. Это важнее, чем удалить metadata и
+оставить stale vectors без владельца.
+
+Переиндексация с заменой файла:
+
+```text
+POST /api/v1/documents/{document_id}/reindex
+```
+
+Reindex требует новый multipart file, потому что исходные файлы в проекте не сохраняются
+постоянно.
+
+Flow:
+
+1. Проверяется, что `Document` существует.
+2. Документ временно получает статус `processing`.
+3. Старые Qdrant points удаляются.
+4. Старые `DocumentChunk` rows удаляются.
+5. `Document.filename` и `Document.content_type` обновляются под новый файл.
+6. Запускается тот же pipeline, что при upload: parse, chunk, embed, Qdrant upsert.
+7. Новые chunks сохраняются в PostgreSQL.
+8. Документ получает статус `indexed`.
+
+Если новый indexing падает после cleanup старых chunks, документ получает статус `failed`.
+Для MVP old chunks не восстанавливаются; это replace-mode поведение явно видно через статус.
+
+Tracing spans для lifecycle:
+
+- `document.delete`
+- `document.delete.load_document`
+- `document.delete.load_chunks`
+- `qdrant.delete_points`
+- `db.document_chunks.delete`
+- `db.document.delete`
+- `document.reindex`
+- `document.reindex.cleanup_old_chunks`
+- `qdrant.delete_old_points`
+- `document.reindex.parse`
+- `document.reindex.chunk`
+- `document.reindex.embed`
+- `qdrant.upsert_new_points`
+- `db.document_chunks.save`
+- `document.reindex.mark_indexed`
+- `document.reindex.mark_failed`
+
+После delete/reindex оба RAG flow автоматически видят актуальное состояние, потому что ручной
+RAG и LangChain RAG читают одну и ту же Qdrant collection.
+
 ## 11. Intent classification
 
 Intent classification находится в:

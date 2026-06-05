@@ -59,6 +59,16 @@ class Settings(BaseSettings):
         default="http://localhost:8000/api/v1/chat",
         validation_alias="TELEGRAM_BACKEND_CHAT_URL",
     )
+    tracing_enabled: bool = Field(default=False, validation_alias="TRACING_ENABLED")
+    otel_service_name: str = Field(
+        default="supportops-ai-agent",
+        validation_alias="OTEL_SERVICE_NAME",
+    )
+    otel_exporter_otlp_endpoint: str = Field(
+        default="http://localhost:4318/v1/traces",
+        validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT",
+    )
+    otel_environment: str = Field(default="local", validation_alias="OTEL_ENVIRONMENT")
 
     @property
     def EMBEDDING_MODEL_NAME(self) -> str:
@@ -91,6 +101,22 @@ class Settings(BaseSettings):
     @property
     def TELEGRAM_BACKEND_CHAT_URL(self) -> str:
         return self.telegram_backend_chat_url
+
+    @property
+    def TRACING_ENABLED(self) -> bool:
+        return self.tracing_enabled
+
+    @property
+    def OTEL_SERVICE_NAME(self) -> str:
+        return self.otel_service_name
+
+    @property
+    def OTEL_EXPORTER_OTLP_ENDPOINT(self) -> str:
+        return self.otel_exporter_otlp_endpoint
+
+    @property
+    def OTEL_ENVIRONMENT(self) -> str:
+        return self.otel_environment
 
 
 @lru_cache

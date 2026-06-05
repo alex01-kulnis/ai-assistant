@@ -5,7 +5,16 @@ from functools import lru_cache
 from typing import Any
 
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, PointStruct, VectorParams
+from qdrant_client.http.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    FilterSelector,
+    MatchValue,
+    PointIdsList,
+    PointStruct,
+    VectorParams,
+)
 
 from app.core.config import get_settings
 from app.schemas.vector import RetrievedChunk, VectorChunkInput
@@ -94,6 +103,32 @@ class QdrantVectorStore:
 
         return [self._to_retrieved_chunk(point) for point in search_results]
 
+    def delete_points(self, point_ids: list[str]) -> int:
+        if not point_ids:
+            return 0
+
+        self.ensure_collection()
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=PointIdsList(points=point_ids),
+            wait=True,
+        )
+
+        return len(point_ids)
+
+    def delete_points_by_document_id(self, document_id: str) -> int:
+        self.ensure_collection()
+
+        document_filter = self._document_id_filter(document_id)
+        points_count = self._count_points_by_filter(document_filter)
+        self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=FilterSelector(filter=document_filter),
+            wait=True,
+        )
+
+        return points_count
+
     def _to_retrieved_chunk(self, point: Any) -> RetrievedChunk:
         payload = point.payload or {}
         return RetrievedChunk(
@@ -106,6 +141,33 @@ class QdrantVectorStore:
             page_number=payload.get("page_number"),
             chunk_index=int(payload["chunk_index"]),
         )
+
+    def _document_id_filter(self, document_id: str) -> Filter:
+        return Filter(
+            must=[
+                FieldCondition(
+                    key="document_id",
+                    match=MatchValue(value=document_id),
+                )
+            ]
+        )
+
+    def _count_points_by_filter(self, points_filter: Filter) -> int:
+        points_count = 0
+        offset: Any = None
+
+        while True:
+            records, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=points_filter,
+                limit=100,
+                offset=offset,
+                with_payload=False,
+                with_vectors=False,
+            )
+            points_count += len(records)
+            if offset is None:
+                return points_count
 
 
 @lru_cache

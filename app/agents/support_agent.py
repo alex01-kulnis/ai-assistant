@@ -7,8 +7,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.tracing import set_span_attributes
 from app.models.agent import AgentRun, ToolCall
 from app.models.conversation import Conversation, Message
 from app.schemas.chat import ChatResponse, ChatSource
@@ -19,6 +21,7 @@ from app.services.tools.order_tools import get_order_status
 from app.vectorstore.qdrant_store import QdrantVectorStore, get_qdrant_vector_store
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 SYSTEM_PROMPT = (
@@ -87,115 +90,203 @@ class SupportAgent:
         session: AsyncSession,
     ) -> ChatResponse:
         started_at = time.perf_counter()
-        intent = self.classify_intent(message)
-        conversation: Conversation | None = None
-        user_message: Message | None = None
-        user_message_persisted = False
-        retrieved_chunks: list[RetrievedChunk] = []
-        tool_calls: list[PendingToolCall] = []
+        with tracer.start_as_current_span("support_agent.chat") as chat_span:
+            set_span_attributes(
+                chat_span,
+                {
+                    "message_length": len(message),
+                    "retrieval_limit": self.retrieval_limit,
+                    "model_name": self.llm_service.model_name,
+                },
+            )
+            with tracer.start_as_current_span("intent.classify") as span:
+                intent = self.classify_intent(message)
+                set_span_attributes(
+                    span,
+                    {
+                        "intent": intent,
+                        "message_length": len(message),
+                    },
+                )
 
-        try:
-            conversation = await self._get_or_create_conversation(
-                session=session,
-                conversation_id=conversation_id,
-            )
-            user_message = Message(
-                id=uuid.uuid4(),
-                conversation_id=conversation.id,
-                role="user",
-                content=message,
-            )
-            session.add(user_message)
-            await session.commit()
-            user_message_persisted = True
+            conversation: Conversation | None = None
+            user_message: Message | None = None
+            user_message_persisted = False
+            retrieved_chunks: list[RetrievedChunk] = []
+            tool_calls: list[PendingToolCall] = []
 
-            query_vector = self.embedding_service.embed_query(message)
-            retrieved_chunks = self.vector_store.search(
-                query_vector=query_vector,
-                limit=self.retrieval_limit,
-            )
-            tool_calls = self._run_tools(intent=intent, message=message)
-            llm_messages = self._build_llm_messages(
-                question=message,
-                intent=intent,
-                retrieved_chunks=retrieved_chunks,
-                tool_calls=tool_calls,
-            )
-            answer = await self.llm_service.generate_chat_response(llm_messages)
-            answer = self._post_process_answer(
-                answer=answer,
-                intent=intent,
-                retrieved_chunks=retrieved_chunks,
-            )
+            try:
+                with tracer.start_as_current_span("conversation.get_or_create") as span:
+                    set_span_attributes(
+                        span,
+                        {"has_conversation_id": conversation_id is not None},
+                    )
+                    conversation = await self._get_or_create_conversation(
+                        session=session,
+                        conversation_id=conversation_id,
+                    )
 
-            assistant_message = Message(
-                id=uuid.uuid4(),
-                conversation_id=conversation.id,
-                role="assistant",
-                content=answer,
-            )
-            agent_run = AgentRun(
-                id=uuid.uuid4(),
-                conversation_id=conversation.id,
-                user_message_id=user_message.id,
-                assistant_message_id=assistant_message.id,
-                intent=intent,
-                status="success",
-                latency_ms=self._elapsed_ms(started_at),
-                model_name=self.llm_service.model_name,
-                retrieved_chunks_count=len(retrieved_chunks),
-            )
-            session.add_all([assistant_message, agent_run])
-            session.add_all(self._build_tool_call_models(agent_run.id, tool_calls))
-            await session.commit()
+                with tracer.start_as_current_span("db.message.save_user"):
+                    user_message = Message(
+                        id=uuid.uuid4(),
+                        conversation_id=conversation.id,
+                        role="user",
+                        content=message,
+                    )
+                    session.add(user_message)
+                    await session.commit()
+                    user_message_persisted = True
 
-            return ChatResponse(
-                conversation_id=str(conversation.id),
-                message_id=str(assistant_message.id),
-                answer=answer,
-                sources=self._build_sources(retrieved_chunks),
-            )
-        except SupportAgentError:
-            raise
-        except OllamaLLMError as exc:
-            await self._try_save_failed_agent_run(
-                session=session,
-                conversation_id=(
-                    conversation.id if user_message_persisted and conversation else None
-                ),
-                user_message_id=(
-                    user_message.id if user_message_persisted and user_message else None
-                ),
-                intent=intent,
-                retrieved_chunks_count=len(retrieved_chunks),
-                tool_calls=tool_calls,
-                started_at=started_at,
-            )
-            raise SupportAgentError(f"LLM request failed: {exc}", status_code=502) from exc
-        except Exception as exc:
-            logger.exception(
-                "Support agent failed for conversation_id=%s",
-                conversation.id if conversation is not None else conversation_id,
-            )
-            await self._try_save_failed_agent_run(
-                session=session,
-                conversation_id=(
-                    conversation.id if user_message_persisted and conversation else None
-                ),
-                user_message_id=(
-                    user_message.id if user_message_persisted and user_message else None
-                ),
-                intent=intent,
-                retrieved_chunks_count=len(retrieved_chunks),
-                tool_calls=tool_calls,
-                started_at=started_at,
-            )
-            if not user_message_persisted:
+                with tracer.start_as_current_span("rag.embedding_query") as span:
+                    query_vector = self.embedding_service.embed_query(message)
+                    set_span_attributes(span, {"vector_size": len(query_vector)})
+
+                with tracer.start_as_current_span("qdrant.search") as span:
+                    retrieved_chunks = self.vector_store.search(
+                        query_vector=query_vector,
+                        limit=self.retrieval_limit,
+                    )
+                    set_span_attributes(
+                        span,
+                        {
+                            "retrieval_limit": self.retrieval_limit,
+                            "retrieved_chunks_count": len(retrieved_chunks),
+                            "top_score": max(
+                                (chunk.score for chunk in retrieved_chunks),
+                                default=None,
+                            ),
+                        },
+                    )
+
+                with tracer.start_as_current_span("tools.run") as span:
+                    tool_calls = self._run_tools(intent=intent, message=message)
+                    set_span_attributes(
+                        span,
+                        {
+                            "intent": intent,
+                            "tool_calls_count": len(tool_calls),
+                        },
+                    )
+
+                with tracer.start_as_current_span("rag.build_prompt") as span:
+                    llm_messages = self._build_llm_messages(
+                        question=message,
+                        intent=intent,
+                        retrieved_chunks=retrieved_chunks,
+                        tool_calls=tool_calls,
+                    )
+                    set_span_attributes(
+                        span,
+                        {"retrieved_chunks_count": len(retrieved_chunks)},
+                    )
+
+                with tracer.start_as_current_span("llm.ollama.generate") as span:
+                    set_span_attributes(span, {"model_name": self.llm_service.model_name})
+                    answer = await self.llm_service.generate_chat_response(llm_messages)
+
+                with tracer.start_as_current_span("answer.post_process") as span:
+                    answer = self._post_process_answer(
+                        answer=answer,
+                        intent=intent,
+                        retrieved_chunks=retrieved_chunks,
+                    )
+                    set_span_attributes(
+                        span,
+                        {
+                            "intent": intent,
+                            "retrieved_chunks_count": len(retrieved_chunks),
+                        },
+                    )
+
+                with tracer.start_as_current_span("db.message.save_assistant"):
+                    assistant_message = Message(
+                        id=uuid.uuid4(),
+                        conversation_id=conversation.id,
+                        role="assistant",
+                        content=answer,
+                    )
+
+                with tracer.start_as_current_span("db.agent_run.save") as span:
+                    agent_run = AgentRun(
+                        id=uuid.uuid4(),
+                        conversation_id=conversation.id,
+                        user_message_id=user_message.id,
+                        assistant_message_id=assistant_message.id,
+                        intent=intent,
+                        status="success",
+                        latency_ms=self._elapsed_ms(started_at),
+                        model_name=self.llm_service.model_name,
+                        retrieved_chunks_count=len(retrieved_chunks),
+                    )
+                    session.add_all([assistant_message, agent_run])
+                    session.add_all(self._build_tool_call_models(agent_run.id, tool_calls))
+                    await session.commit()
+                    set_span_attributes(
+                        span,
+                        {
+                            "intent": intent,
+                            "status": "success",
+                            "latency_ms": agent_run.latency_ms,
+                            "model_name": self.llm_service.model_name,
+                            "retrieved_chunks_count": len(retrieved_chunks),
+                        },
+                    )
+
+                with tracer.start_as_current_span("response.build") as span:
+                    set_span_attributes(
+                        span,
+                        {"retrieved_chunks_count": len(retrieved_chunks)},
+                    )
+                    return ChatResponse(
+                        conversation_id=str(conversation.id),
+                        message_id=str(assistant_message.id),
+                        answer=answer,
+                        sources=self._build_sources(retrieved_chunks),
+                    )
+            except SupportAgentError:
+                raise
+            except OllamaLLMError as exc:
+                await self._try_save_failed_agent_run(
+                    session=session,
+                    conversation_id=(
+                        conversation.id if user_message_persisted and conversation else None
+                    ),
+                    user_message_id=(
+                        user_message.id if user_message_persisted and user_message else None
+                    ),
+                    intent=intent,
+                    retrieved_chunks_count=len(retrieved_chunks),
+                    tool_calls=tool_calls,
+                    started_at=started_at,
+                )
+                raise SupportAgentError(f"LLM request failed: {exc}", status_code=502) from exc
+            except Exception as exc:
+                logger.exception(
+                    "Support agent failed for conversation_id=%s",
+                    conversation.id if conversation is not None else conversation_id,
+                )
+                await self._try_save_failed_agent_run(
+                    session=session,
+                    conversation_id=(
+                        conversation.id if user_message_persisted and conversation else None
+                    ),
+                    user_message_id=(
+                        user_message.id if user_message_persisted and user_message else None
+                    ),
+                    intent=intent,
+                    retrieved_chunks_count=len(retrieved_chunks),
+                    tool_calls=tool_calls,
+                    started_at=started_at,
+                )
+                if not user_message_persisted:
+                    raise SupportAgentError(
+                        "Database is unavailable. Check PostgreSQL.",
+                        status_code=503,
+                    ) from exc
                 raise SupportAgentError(
-                    "Database is unavailable. Check PostgreSQL.",
-                    status_code=503,
+                    "Failed to generate chat response.",
+                    status_code=500,
                 ) from exc
-            raise SupportAgentError("Failed to generate chat response.", status_code=500) from exc
 
     def classify_intent(self, message: str) -> str:
         normalized_message = message.casefold()

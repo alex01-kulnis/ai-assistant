@@ -12,6 +12,21 @@ class DocumentUploadResponse(BaseModel):
     status: str
 
 
+class DocumentDeleteResponse(BaseModel):
+    document_id: str
+    filename: str
+    deleted_chunks_count: int
+    deleted_qdrant_points_count: int
+    status: str = "deleted"
+
+
+class DocumentReindexResponse(BaseModel):
+    document_id: str
+    filename: str
+    chunks_count: int
+    status: str
+
+
 class DocumentListItem(BaseModel):
     id: str
     filename: str

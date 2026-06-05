@@ -5,6 +5,7 @@ import pytest
 pytest.importorskip("qdrant_client")
 
 from qdrant_client import QdrantClient  # noqa: E402
+from qdrant_client.http.models import FieldCondition, Filter, MatchValue  # noqa: E402
 
 from app.core.config import get_settings  # noqa: E402
 from app.schemas.vector import VectorChunkInput  # noqa: E402
@@ -61,3 +62,62 @@ def test_qdrant_upsert_and_search_finds_chunk() -> None:
     assert results[0].filename == "faq.txt"
     assert results[0].page_number is None
     assert results[0].chunk_index == 0
+
+
+@pytest.mark.integration
+def test_qdrant_delete_points_by_document_id_removes_document_points() -> None:
+    settings = get_settings()
+    collection_name = f"{settings.QDRANT_COLLECTION_NAME}_test_{uuid.uuid4().hex}"
+    client = QdrantClient(url=settings.qdrant_url, timeout=5, check_compatibility=False)
+    store = QdrantVectorStore(client=client, collection_name=collection_name)
+
+    try:
+        client.get_collections()
+    except Exception as exc:
+        pytest.skip(f"Qdrant is not available: {exc}")
+
+    store.ensure_collection()
+
+    document_id = uuid.uuid4()
+    chunk_id = uuid.uuid4()
+    vector = [0.0] * 384
+    vector[0] = 1.0
+
+    try:
+        store.upsert_chunks(
+            [
+                VectorChunkInput(
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    chunk_index=0,
+                    filename="faq.txt",
+                    page_number=None,
+                    text="Password reset instructions",
+                    vector=vector,
+                )
+            ]
+        )
+
+        deleted_count = store.delete_points_by_document_id(str(document_id))
+        records, _offset = client.scroll(
+            collection_name=collection_name,
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="document_id",
+                        match=MatchValue(value=str(document_id)),
+                    )
+                ]
+            ),
+            limit=10,
+            with_payload=True,
+            with_vectors=False,
+        )
+    finally:
+        try:
+            client.delete_collection(collection_name=collection_name)
+        except Exception:
+            pass
+
+    assert deleted_count == 1
+    assert records == []

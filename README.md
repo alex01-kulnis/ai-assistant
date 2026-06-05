@@ -149,8 +149,8 @@ QDRANT_COLLECTION_NAME=support_knowledge_base
 
 ## Docker
 
-Start PostgreSQL, Qdrant, and Redis. PostgreSQL is exposed on `localhost:5433` by default
-to avoid conflicts with a locally installed PostgreSQL on `5432`.
+Start PostgreSQL, Qdrant, Redis, and Jaeger. PostgreSQL is exposed on `localhost:5433`
+by default to avoid conflicts with a locally installed PostgreSQL on `5432`.
 
 ```bash
 make docker-up
@@ -166,6 +166,12 @@ Qdrant dashboard:
 
 ```text
 http://localhost:6333/dashboard
+```
+
+Jaeger UI:
+
+```text
+http://localhost:16686
 ```
 
 Stop infrastructure:
@@ -344,6 +350,49 @@ List documents:
 curl http://localhost:8000/api/v1/documents
 ```
 
+## Document Lifecycle
+
+Delete a document from the knowledge base:
+
+Endpoint: `DELETE /api/v1/documents/{document_id}`
+
+```bash
+curl -X DELETE http://127.0.0.1:8000/api/v1/documents/<document_id>
+```
+
+Example response:
+
+```json
+{
+  "document_id": "7ed15b28-91ef-471f-a74d-7f509f9c741d",
+  "filename": "example.txt",
+  "deleted_chunks_count": 1,
+  "deleted_qdrant_points_count": 1,
+  "status": "deleted"
+}
+```
+
+Delete removes both PostgreSQL metadata and Qdrant vectors. Qdrant points are deleted first by
+stored `qdrant_point_id`; then the service also deletes by Qdrant payload `document_id` as a
+fallback to avoid stale vectors.
+
+Replace an indexed document with a new uploaded file:
+
+Endpoint: `POST /api/v1/documents/{document_id}/reindex`
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/documents/<document_id>/reindex \
+  -F "file=@updated_policy.pdf"
+```
+
+Reindex requires a new file because original files are not persisted. It removes old Qdrant
+points and old `document_chunks`, then runs the same parse/chunk/embed/upsert pipeline as upload.
+For MVP, if replacement indexing fails after old chunks are cleaned up, the document is marked
+`failed` and old chunks are not restored.
+
+After delete or reindex, sources in both `/api/v1/chat` and `/api/v1/chat/langchain` update
+automatically because both RAG flows read from the same Qdrant collection.
+
 ## Chat Request
 
 Ask a question:
@@ -392,6 +441,61 @@ Example response:
   ]
 }
 ```
+
+## OpenTelemetry Tracing
+
+Tracing is disabled by default. Enable it in `.env`:
+
+```env
+TRACING_ENABLED=true
+OTEL_SERVICE_NAME=supportops-ai-agent
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
+OTEL_ENVIRONMENT=local
+```
+
+Start infrastructure and FastAPI:
+
+```bash
+make docker-up
+make dev
+```
+
+Open Jaeger:
+
+```text
+http://localhost:16686
+```
+
+Generate a trace for the manual RAG endpoint:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Как оформить возврат?"}'
+```
+
+Generate a trace for the LangChain RAG endpoint:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat/langchain \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Как оформить возврат?"}'
+```
+
+Generate a trace for document ingestion:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/documents/upload \
+  -F "file=@refund_policy.txt"
+```
+
+In Jaeger, choose service `supportops-ai-agent` and search traces. Manual spans include
+`support_agent.chat`, `rag.embedding_query`, `qdrant.search`, `llm.ollama.generate`, and
+document ingestion spans like `document.parse`, `chunking.split_pages`, and
+`qdrant.upsert_chunks`. Document lifecycle spans include `document.delete`,
+`qdrant.delete_points`, `db.document.delete`, `document.reindex`,
+`qdrant.delete_old_points`, `qdrant.upsert_new_points`, and
+`document.reindex.mark_indexed`.
 
 ## Tests
 
