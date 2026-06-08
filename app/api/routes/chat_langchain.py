@@ -16,7 +16,7 @@ from app.schemas.chat import ChatRequest, ChatResponse
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 
 
-@router.post("/chat/langchain", response_model=ChatResponse)
+@router.post("/chat/langchain", response_model=ChatResponse, response_model_exclude_none=True)
 async def chat_langchain(
     request: ChatRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],

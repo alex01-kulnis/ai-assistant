@@ -1,0 +1,10 @@
+{"request":{"question":"Как оформить возврат клиенту?"},"expected_intent":"rag_question"}
+{"request":{"question":"Что делать если клиент просит SLA по тикету?"},"expected_intent":"rag_question"}
+{"request":{"question":"Найди правила обработки обращения","document_id":"doc-123"},"expected_intent":"rag_question"}
+{"request":{"question":"Суммаризируй выделенный текст","action":"summarize","selected_text":"Клиент просит вернуть оплату и уточняет сроки обработки заявки."},"expected_intent":"summarization"}
+{"request":{"question":"Кратко перескажи обращение клиента"},"expected_intent":"summarization"}
+{"request":{"question":"Проанализируй клиента и риск оттока","customer_id":"cust-123"},"expected_intent":"customer_analysis"}
+{"request":{"question":"Что ему предложить для реактивации?"},"expected_intent":"customer_analysis"}
+{"request":{"question":"удали все документы"},"expected_intent":"unsupported"}
+{"request":{"question":"drop table conversations"},"expected_intent":"unsupported"}
+

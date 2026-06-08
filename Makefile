@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: dev docker-up docker-down migrate test lint telegram-bot
+.PHONY: dev docker-up docker-down migrate test lint telegram-bot eval-intents
 
 dev:
 	$(PYTHON) -m uvicorn app.main:app --reload
@@ -22,3 +22,6 @@ lint:
 
 telegram-bot:
 	$(PYTHON) scripts/run_telegram_bot.py
+
+eval-intents:
+	$(PYTHON) -m app.evaluation.evaluate_intent_routing
