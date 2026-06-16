@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Self
+from typing import Any, Self
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -15,6 +15,20 @@ class ChatRequest(BaseModel):
     document_id: str | None = None
     action: str | None = None
     selected_text: str | None = None
+    debug: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_message_text_field(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if "message_text" not in data:
+            return data
+        if data.get("message") or data.get("question"):
+            return data
+        normalized_data = dict(data)
+        normalized_data["question"] = normalized_data["message_text"]
+        return normalized_data
 
     @model_validator(mode="after")
     def validate_message_or_question(self) -> Self:
@@ -47,3 +61,7 @@ class ChatResponse(BaseModel):
     intent: str | None = None
     intent_confidence: float | None = None
     router_source: str | None = None
+    selected_agent: str | None = None
+    validation_errors: list[str] | None = None
+    needs_human_review: bool | None = None
+    trace: list[dict[str, Any]] | None = None

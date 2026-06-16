@@ -1,0 +1,6 @@
+{"request": {"message_text": "Как оформить возврат клиенту?"}, "expected_intent": "rag_question", "expected_agent": "rag_agent"}
+{"request": {"message_text": "Суммаризируй обращение клиента", "selected_text": "Клиент жалуется на задержку доставки и просит возврат."}, "expected_intent": "summarization", "expected_agent": "summarization_agent"}
+{"request": {"message_text": "Проанализируй клиента и предложи следующее действие", "customer_id": "123"}, "expected_intent": "customer_analysis", "expected_agent": "customer_analysis_agent"}
+{"request": {"message_text": "Клиент давно не покупал, что ему предложить?", "customer_id": "123"}, "expected_intent": "customer_analysis", "expected_agent": "customer_analysis_agent"}
+{"request": {"message_text": "Удали все документы из базы"}, "expected_intent": "unsupported", "expected_agent": "fallback"}
+

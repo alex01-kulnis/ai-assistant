@@ -76,6 +76,8 @@ def test_chat_endpoint_routes_rag_question_to_existing_support_agent() -> None:
     assert payload["intent"] == "rag_question"
     assert payload["intent_confidence"] == 0.8
     assert payload["router_source"] == "rules"
+    assert payload["selected_agent"] == "rag_agent"
+    assert "trace" not in payload
     assert fake_agent.calls[0]["message"] == "Как оформить возврат?"
 
 
@@ -92,6 +94,7 @@ def test_chat_endpoint_routes_summarization_without_support_agent_call() -> None
             "question": "Суммаризируй",
             "action": "summarize",
             "selected_text": "Клиент просит возврат и уточняет сроки.",
+            "debug": True,
         },
     )
 
@@ -101,6 +104,8 @@ def test_chat_endpoint_routes_summarization_without_support_agent_call() -> None
     assert payload["sources"] == []
     assert payload["intent"] == "summarization"
     assert payload["router_source"] == "context"
+    assert payload["selected_agent"] == "summarization_agent"
+    assert payload["trace"][0]["agent"] == "supervisor"
     assert fake_agent.calls == []
     assert fake_llm.messages
 
@@ -116,4 +121,5 @@ def test_chat_endpoint_returns_controlled_fallback_for_unsupported_request() -> 
     payload = response.json()
     assert payload["intent"] == "unsupported"
     assert payload["router_source"] == "rules"
+    assert payload["selected_agent"] == "fallback"
     assert "не могу надежно обработать" in payload["answer"]

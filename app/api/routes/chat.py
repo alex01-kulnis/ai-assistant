@@ -8,23 +8,22 @@ from fastapi import APIRouter, Depends, HTTPException
 from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.customer_analysis_agent import CustomerAnalysisAgent
+from app.agents.rag_agent import RagAgent
+from app.agents.state import AgentState
+from app.agents.summarization_agent import SummarizationAgent
+from app.agents.supervisor import SupervisorAgent
 from app.agents.support_agent import SupportAgent, SupportAgentError
 from app.core.tracing import set_span_attributes
 from app.db.session import get_db_session
 from app.routing.classifier import classify_intent
 from app.routing.schemas import IntentResult
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.services.llm_service import OllamaLLMError, OllamaLLMService
-from app.services.tools.customer_tools import get_mock_customer_profile
+from app.services.llm_service import OllamaLLMService
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
-
-UNSUPPORTED_REQUEST_MESSAGE = (
-    "Я не могу надежно обработать этот запрос в текущем сценарии. "
-    "Попробуйте задать вопрос по документам, тикету или клиентскому профилю."
-)
 
 
 def get_support_agent() -> SupportAgent:
@@ -35,7 +34,7 @@ def get_llm_service() -> OllamaLLMService:
     return OllamaLLMService()
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, response_model_exclude_none=True)
 async def chat(
     request: ChatRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -43,156 +42,81 @@ async def chat(
     llm_service: Annotated[OllamaLLMService, Depends(get_llm_service)],
 ) -> ChatResponse:
     intent_result = await classify_intent(request, llm_service=llm_service)
+    print("intent_result", intent_result)
     _log_intent_result(request, intent_result)
 
-    with tracer.start_as_current_span("chat.route") as span:
+    state = _build_agent_state(request=request, intent_result=intent_result)
+
+    print("state", state)
+    supervisor = SupervisorAgent(
+        rag_agent=RagAgent(support_agent=agent, session=session),
+        summarization_agent=SummarizationAgent(llm_service=llm_service),
+        customer_analysis_agent=CustomerAnalysisAgent(llm_service=llm_service),
+    )
+
+    with tracer.start_as_current_span("chat.multi_agent_workflow") as span:
         set_span_attributes(
             span,
             {
-                "intent": intent_result.intent,
-                "intent_confidence": intent_result.confidence,
-                "router_source": intent_result.source,
-                "message_length": len(request.message_text),
+                "request_id": state.request_id,
+                "intent": state.intent,
+                "intent_confidence": state.intent_confidence,
+                "router_source": state.router_source,
+                "message_length": len(state.message_text),
             },
         )
+        try:
+            state = await supervisor.run(state)
+        except SupportAgentError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
-        if intent_result.intent == "rag_question":
-            return await _run_rag_chat(
-                request=request,
-                session=session,
-                agent=agent,
-                intent_result=intent_result,
-            )
-
-        if intent_result.intent == "summarization":
-            return await _run_summarization(
-                request=request,
-                llm_service=llm_service,
-                intent_result=intent_result,
-            )
-
-        if intent_result.intent == "customer_analysis":
-            return _run_customer_analysis(request=request, intent_result=intent_result)
-
-        return _build_chat_response(
-            answer=UNSUPPORTED_REQUEST_MESSAGE,
-            conversation_id=request.conversation_id,
-            intent_result=intent_result,
+        set_span_attributes(
+            span,
+            {
+                "agent.selected_agent": state.selected_agent,
+                "agent.intent": state.intent,
+                "agent.needs_human_review": state.needs_human_review,
+                "agent.validation_errors_count": len(state.validation_errors),
+            },
         )
+        return _build_chat_response(state)
 
 
-async def _run_rag_chat(
+def _build_agent_state(
     *,
     request: ChatRequest,
-    session: AsyncSession,
-    agent: SupportAgent,
     intent_result: IntentResult,
-) -> ChatResponse:
-    try:
-        response = await agent.chat(
-            conversation_id=request.conversation_id,
-            message=request.message_text,
-            session=session,
-        )
-        return _with_intent_metadata(response, intent_result)
-    except SupportAgentError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-
-
-async def _run_summarization(
-    *,
-    request: ChatRequest,
-    llm_service: OllamaLLMService,
-    intent_result: IntentResult,
-) -> ChatResponse:
-    if not request.selected_text:
-        return _build_chat_response(
-            answer=(
-                "Для суммаризации передайте текст в поле selected_text. "
-                "Сейчас нечего кратко пересказать."
-            ),
-            conversation_id=request.conversation_id,
-            intent_result=intent_result,
-        )
-
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Ты support assistant. Кратко суммаризируй только переданный текст. "
-                "Не добавляй факты извне и отвечай на русском языке."
-            ),
-        },
-        {
-            "role": "user",
-            "content": f"TEXT:\n{request.selected_text}\n\nSUMMARY:",
-        },
-    ]
-    try:
-        answer = await llm_service.generate_chat_response(messages, temperature=0.1)
-    except OllamaLLMError as exc:
-        raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
-
-    return _build_chat_response(
-        answer=answer.strip(),
+) -> AgentState:
+    return AgentState(
+        request_id=str(uuid.uuid4()),
         conversation_id=request.conversation_id,
-        intent_result=intent_result,
-    )
-
-
-def _run_customer_analysis(
-    *,
-    request: ChatRequest,
-    intent_result: IntentResult,
-) -> ChatResponse:
-    profile = get_mock_customer_profile(request.customer_id)
-    if request.customer_id is None:
-        answer = (
-            "Для точного анализа клиента нужен customer_id. "
-            "В текущем MVP можно оценить профиль клиента, риск оттока и следующее действие, "
-            "если передать customer_id."
-        )
-    else:
-        answer = (
-            f"Клиент {request.customer_id}: сегмент - {profile['segment']}, "
-            f"риск оттока - {profile['churn_risk']}. "
-            f"Рекомендация: {profile['recommended_action']}"
-        )
-
-    return _build_chat_response(
-        answer=answer,
-        conversation_id=request.conversation_id,
-        intent_result=intent_result,
-    )
-
-
-def _with_intent_metadata(
-    response: ChatResponse,
-    intent_result: IntentResult,
-) -> ChatResponse:
-    return response.model_copy(
-        update={
-            "intent": intent_result.intent,
-            "intent_confidence": intent_result.confidence,
-            "router_source": intent_result.source,
-        }
-    )
-
-
-def _build_chat_response(
-    *,
-    answer: str,
-    conversation_id: str | None,
-    intent_result: IntentResult,
-) -> ChatResponse:
-    return ChatResponse(
-        conversation_id=conversation_id or str(uuid.uuid4()),
-        message_id=str(uuid.uuid4()),
-        answer=answer,
-        sources=[],
+        user_id=request.user_id,
+        message_text=request.message_text,
         intent=intent_result.intent,
         intent_confidence=intent_result.confidence,
         router_source=intent_result.source,
+        customer_id=request.customer_id,
+        ticket_id=request.ticket_id,
+        document_id=request.document_id,
+        action=request.action,
+        selected_text=request.selected_text,
+        debug=request.debug,
+    )
+
+
+def _build_chat_response(state: AgentState) -> ChatResponse:
+    return ChatResponse(
+        conversation_id=state.conversation_id or str(uuid.uuid4()),
+        message_id=state.message_id or str(uuid.uuid4()),
+        answer=state.answer or "",
+        sources=state.sources,
+        intent=state.intent,
+        intent_confidence=state.intent_confidence,
+        router_source=state.router_source,
+        selected_agent=state.selected_agent,
+        validation_errors=state.validation_errors,
+        needs_human_review=state.needs_human_review,
+        trace=state.trace if state.debug else None,
     )
 
 
