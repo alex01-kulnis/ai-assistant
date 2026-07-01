@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.integrations.telegram.client import TelegramClient
+from app.integrations.telegram.schemas import TelegramUpdate
+from app.schemas.chat import ChatRequest
+from app.services.chat_workflow_service import ChatWorkflowService
+from app.voice.service import VoiceService
 
 
 @dataclass(frozen=True)
@@ -188,3 +195,101 @@ def _extract_error_detail(response: httpx.Response) -> str:
             return str(detail)
 
     return response.text
+
+
+SAFE_REVIEW_MESSAGE = "Запрос требует проверки специалистом. Я передал его на review."
+TRANSCRIPTION_FAILED_MESSAGE = (
+    "Не удалось распознать голосовое сообщение. "
+    "Попробуйте записать его ещё раз или отправьте текстом."
+)
+
+
+class TelegramWebhookService:
+    def __init__(
+        self,
+        *,
+        telegram_client: TelegramClient,
+        voice_service: VoiceService,
+        chat_workflow: ChatWorkflowService,
+        audio_tmp_dir: Path | None = None,
+    ) -> None:
+        settings = get_settings()
+        self.telegram_client = telegram_client
+        self.voice_service = voice_service
+        self.chat_workflow = chat_workflow
+        self.audio_tmp_dir = audio_tmp_dir or Path(settings.VOICE_AUDIO_TMP_DIR)
+
+    async def handle_update(
+        self,
+        *,
+        update: TelegramUpdate,
+        session: AsyncSession,
+    ) -> None:
+        message = update.message
+        if message is None:
+            return
+
+        chat_id = message.chat.id
+        if message.text:
+            await self._handle_text_message(
+                chat_id=chat_id,
+                text=message.text,
+                session=session,
+            )
+            return
+
+        if message.voice:
+            await self._handle_voice_message(
+                chat_id=chat_id,
+                file_id=message.voice.file_id,
+                session=session,
+            )
+
+    async def _handle_text_message(
+        self,
+        *,
+        chat_id: int,
+        text: str,
+        session: AsyncSession,
+    ) -> None:
+        response = await self.chat_workflow.process(
+            request=ChatRequest(message=text, user_id=str(chat_id)),
+            session=session,
+        )
+        await self.telegram_client.send_message(
+            chat_id=chat_id,
+            text=SAFE_REVIEW_MESSAGE if response.needs_human_review else response.answer,
+        )
+
+    async def _handle_voice_message(
+        self,
+        *,
+        chat_id: int,
+        file_id: str,
+        session: AsyncSession,
+    ) -> None:
+        telegram_file = await self.telegram_client.get_file(file_id)
+        audio_path = await self.telegram_client.download_file(
+            telegram_file.file_path,
+            self.audio_tmp_dir,
+        )
+        voice_response = await self.voice_service.handle_voice_message(
+            audio_path=audio_path,
+            session=session,
+            chat_workflow=self.chat_workflow,
+            user_id=str(chat_id),
+            cleanup=True,
+        )
+        if voice_response.status == "needs_human_review":
+            await self.telegram_client.send_message(chat_id=chat_id, text=SAFE_REVIEW_MESSAGE)
+            return
+        if voice_response.status == "transcription_failed":
+            await self.telegram_client.send_message(
+                chat_id=chat_id,
+                text=TRANSCRIPTION_FAILED_MESSAGE,
+            )
+            return
+        await self.telegram_client.send_message(
+            chat_id=chat_id,
+            text=voice_response.answer or TRANSCRIPTION_FAILED_MESSAGE,
+        )

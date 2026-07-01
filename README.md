@@ -26,6 +26,8 @@ Detailed architecture and runtime flow notes are in
 - RAG chat endpoint with sources.
 - Parallel LangChain RAG chat endpoint for side-by-side comparison.
 - Telegram bot integration for local chat testing.
+- Telegram webhook endpoint for text and voice updates.
+- Voice input mode via local `faster-whisper` speech-to-text.
 - Simple support agent layer with keyword intent classification.
 - Fake tools with persisted `ToolCall` records.
 - Basic unit and integration test structure.
@@ -44,6 +46,7 @@ Detailed architecture and runtime flow notes are in
 - Ollama
 - aiogram 3
 - LangChain
+- `faster-whisper`
 - `sentence-transformers`
 - PyMuPDF
 - httpx
@@ -62,6 +65,7 @@ app/
   schemas/           Pydantic request/response schemas
   services/          parser, chunker, embeddings, LLM, RAG, ingestion
   services/tools/    fake support tools
+  voice/             audio conversion, local STT, voice chat service
   vectorstore/       Qdrant integration
   workers/           reserved for background jobs
 tests/               unit and integration tests
@@ -121,6 +125,18 @@ flowchart LR
     B --> J["Conversation, Message, AgentRun, ToolCall"]
 ```
 
+### Voice Chat
+
+```mermaid
+flowchart LR
+    A["Audio upload or Telegram voice"] --> B["AudioConverter"]
+    B --> C["ffmpeg WAV 16kHz mono"]
+    C --> D["LocalSpeechToTextService"]
+    D --> E["Transcript"]
+    E --> F["Existing /chat supervisor pipeline"]
+    F --> G["Text answer"]
+```
+
 ## Setup
 
 Create and activate a virtual environment:
@@ -129,6 +145,21 @@ Create and activate a virtual environment:
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+```
+
+Voice input uses local `faster-whisper` and requires system `ffmpeg` for Telegram OGG/Opus
+conversion.
+
+macOS:
+
+```bash
+brew install ffmpeg
+```
+
+Ubuntu/Debian:
+
+```bash
+sudo apt-get update && sudo apt-get install -y ffmpeg
 ```
 
 Create local environment config:
@@ -145,6 +176,8 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:7b
 EMBEDDING_MODEL_NAME=intfloat/multilingual-e5-small
 QDRANT_COLLECTION_NAME=support_knowledge_base
+VOICE_STT_MODEL=base
+VOICE_DEFAULT_LANGUAGE=ru
 ```
 
 ## Docker
@@ -248,7 +281,8 @@ Useful URLs:
 ## Telegram Bot
 
 The Telegram bot is a separate long-polling process for local development. It is not started by
-FastAPI and it does not use webhooks yet.
+FastAPI. The project also exposes a separate webhook endpoint for Telegram text and voice
+updates.
 
 Create a bot:
 
@@ -264,6 +298,8 @@ TELEGRAM_BOT_TOKEN=<your-bot-token>
 TELEGRAM_ALLOWED_USER_IDS=123456,789012
 TELEGRAM_USE_BACKEND_HTTP=true
 TELEGRAM_BACKEND_CHAT_URL=http://localhost:8000/api/v1/chat
+TELEGRAM_ENABLED=false
+TELEGRAM_WEBHOOK_SECRET=<optional-webhook-secret>
 ```
 
 `TELEGRAM_ALLOWED_USER_IDS` is optional. If it is empty, every Telegram user can use the bot.
@@ -312,6 +348,39 @@ Telegram troubleshooting:
   `make dev` and check `http://localhost:8000/health`.
 - `LLM сейчас недоступна. Проверь Ollama.` means start Ollama and verify
   `ollama run qwen2.5:7b` or `GET /api/v1/llm/health`.
+
+### Telegram Webhook
+
+Webhook endpoint:
+
+```text
+POST /api/v1/telegram/webhook
+```
+
+Enable it in `.env`:
+
+```env
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=<your-bot-token>
+TELEGRAM_WEBHOOK_SECRET=<your-secret>
+```
+
+Register the webhook:
+
+```bash
+curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://your-public-url/api/v1/telegram/webhook&secret_token=<YOUR_SECRET>"
+```
+
+For local testing, expose FastAPI through a tunnel such as `ngrok`, `cloudflared tunnel`, or
+`localtunnel`:
+
+```bash
+ngrok http 8000
+```
+
+Telegram voice messages are downloaded with `getFile`, converted from OGG/Opus to WAV through
+`ffmpeg`, transcribed locally, then passed through the same supervisor/guardrails pipeline as
+text chat. Telegram receives only a text answer; TTS/audio responses are not implemented yet.
 
 ## Upload Document
 
@@ -442,6 +511,59 @@ Example response:
 }
 ```
 
+## Voice Input
+
+Voice mode is an input layer over the existing supervisor pipeline. It does not add a separate
+voice agent and it does not bypass guardrails or human review checks.
+
+Settings:
+
+```env
+VOICE_ENABLED=true
+VOICE_STT_PROVIDER=local_whisper
+VOICE_STT_MODEL=base
+VOICE_STT_DEVICE=cpu
+VOICE_STT_COMPUTE_TYPE=int8
+VOICE_DEFAULT_LANGUAGE=ru
+VOICE_AUDIO_TMP_DIR=tmp/audio
+VOICE_MAX_AUDIO_SIZE_MB=25
+VOICE_KEEP_AUDIO_FILES=false
+VOICE_CONVERT_TO_WAV=true
+```
+
+Transcribe audio without calling agents:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/voice/transcribe" \
+  -F "file=@sample.mp3"
+```
+
+Voice chat through the existing supervisor pipeline:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/voice/chat" \
+  -F "file=@sample.mp3"
+```
+
+Example voice chat response:
+
+```json
+{
+  "transcript": "Клиент просит вернуть деньги за подписку",
+  "status": "needs_human_review",
+  "answer": "Я подготовил запрос, но возврат средств требует проверки специалистом.",
+  "agent_run_id": "...",
+  "review_reason": "high_risk_action",
+  "stt_provider": "local_whisper",
+  "stt_model": "base",
+  "stt_latency_ms": 1430
+}
+```
+
+Voice metadata is stored on `agent_runs` when the request reaches the persisted RAG flow:
+`input_mode`, `input_audio_path`, `input_transcript`, `stt_provider`, `stt_model`, and
+`stt_latency_ms`.
+
 ## OpenTelemetry Tracing
 
 Tracing is disabled by default. Enable it in `.env`:
@@ -534,6 +656,8 @@ make migrate      # apply Alembic migrations
 make test         # run pytest
 make lint         # run ruff
 make telegram-bot # run Telegram long-polling bot
+make eval-intents # evaluate intent routing
+make eval-agents  # evaluate supervisor agent selection
 ```
 
 ## Architecture Decisions
@@ -575,3 +699,6 @@ Telegram bot or the existing API contract.
 5. Add streaming chat responses.
 6. Add OCR for scanned PDFs.
 7. Add observability for latency, retrieval scores, and LLM failures.
+8. Add TTS/audio responses for Telegram and voice clients.
+9. Add dedicated voice transcription storage and STT evaluation.
+10. Add realtime voice mode.

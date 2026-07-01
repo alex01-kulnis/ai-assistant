@@ -37,9 +37,18 @@ class RagAgent(BaseAgent):
             conversation_id=state.conversation_id,
             message=state.message_text,
             session=self.session,
+            input_metadata={
+                "input_mode": state.input_mode,
+                "input_audio_path": state.input_audio_path,
+                "input_transcript": state.input_transcript,
+                "stt_provider": state.stt_provider,
+                "stt_model": state.stt_model,
+                "stt_latency_ms": state.stt_latency_ms,
+            },
         )
         state.conversation_id = response.conversation_id
         state.message_id = response.message_id
+        state.agent_run_id = response.agent_run_id
         state.answer = response.answer
         state.sources = list(response.sources)
         state.add_trace_step(

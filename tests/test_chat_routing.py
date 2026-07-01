@@ -21,12 +21,14 @@ class FakeSupportAgent:
         conversation_id: str | None,
         message: str,
         session: AsyncSession,
+        input_metadata: dict[str, Any] | None = None,
     ) -> ChatResponse:
         self.calls.append(
             {
                 "conversation_id": conversation_id,
                 "message": message,
                 "session": session,
+                "input_metadata": input_metadata,
             }
         )
         return ChatResponse(

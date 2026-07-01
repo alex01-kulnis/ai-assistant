@@ -59,6 +59,44 @@ class Settings(BaseSettings):
         default="http://localhost:8000/api/v1/chat",
         validation_alias="TELEGRAM_BACKEND_CHAT_URL",
     )
+    telegram_enabled: bool = Field(default=False, validation_alias="TELEGRAM_ENABLED")
+    telegram_webhook_secret: str | None = Field(
+        default=None,
+        validation_alias="TELEGRAM_WEBHOOK_SECRET",
+    )
+    telegram_api_base_url: str = Field(
+        default="https://api.telegram.org",
+        validation_alias="TELEGRAM_API_BASE_URL",
+    )
+    telegram_file_base_url: str = Field(
+        default="https://api.telegram.org/file",
+        validation_alias="TELEGRAM_FILE_BASE_URL",
+    )
+    voice_enabled: bool = Field(default=True, validation_alias="VOICE_ENABLED")
+    voice_stt_provider: str = Field(
+        default="local_whisper",
+        validation_alias="VOICE_STT_PROVIDER",
+    )
+    voice_stt_model: str = Field(default="base", validation_alias="VOICE_STT_MODEL")
+    voice_stt_device: str = Field(default="cpu", validation_alias="VOICE_STT_DEVICE")
+    voice_stt_compute_type: str = Field(
+        default="int8",
+        validation_alias="VOICE_STT_COMPUTE_TYPE",
+    )
+    voice_default_language: str = Field(default="ru", validation_alias="VOICE_DEFAULT_LANGUAGE")
+    voice_audio_tmp_dir: str = Field(default="tmp/audio", validation_alias="VOICE_AUDIO_TMP_DIR")
+    voice_max_audio_size_mb: int = Field(
+        default=25,
+        validation_alias="VOICE_MAX_AUDIO_SIZE_MB",
+    )
+    voice_keep_audio_files: bool = Field(
+        default=False,
+        validation_alias="VOICE_KEEP_AUDIO_FILES",
+    )
+    voice_convert_to_wav: bool = Field(
+        default=True,
+        validation_alias="VOICE_CONVERT_TO_WAV",
+    )
     tracing_enabled: bool = Field(default=False, validation_alias="TRACING_ENABLED")
     otel_service_name: str = Field(
         default="supportops-ai-agent",
@@ -101,6 +139,62 @@ class Settings(BaseSettings):
     @property
     def TELEGRAM_BACKEND_CHAT_URL(self) -> str:
         return self.telegram_backend_chat_url
+
+    @property
+    def TELEGRAM_ENABLED(self) -> bool:
+        return self.telegram_enabled
+
+    @property
+    def TELEGRAM_WEBHOOK_SECRET(self) -> str | None:
+        return self.telegram_webhook_secret
+
+    @property
+    def TELEGRAM_API_BASE_URL(self) -> str:
+        return self.telegram_api_base_url
+
+    @property
+    def TELEGRAM_FILE_BASE_URL(self) -> str:
+        return self.telegram_file_base_url
+
+    @property
+    def VOICE_ENABLED(self) -> bool:
+        return self.voice_enabled
+
+    @property
+    def VOICE_STT_PROVIDER(self) -> str:
+        return self.voice_stt_provider
+
+    @property
+    def VOICE_STT_MODEL(self) -> str:
+        return self.voice_stt_model
+
+    @property
+    def VOICE_STT_DEVICE(self) -> str:
+        return self.voice_stt_device
+
+    @property
+    def VOICE_STT_COMPUTE_TYPE(self) -> str:
+        return self.voice_stt_compute_type
+
+    @property
+    def VOICE_DEFAULT_LANGUAGE(self) -> str:
+        return self.voice_default_language
+
+    @property
+    def VOICE_AUDIO_TMP_DIR(self) -> str:
+        return self.voice_audio_tmp_dir
+
+    @property
+    def VOICE_MAX_AUDIO_SIZE_MB(self) -> int:
+        return self.voice_max_audio_size_mb
+
+    @property
+    def VOICE_KEEP_AUDIO_FILES(self) -> bool:
+        return self.voice_keep_audio_files
+
+    @property
+    def VOICE_CONVERT_TO_WAV(self) -> bool:
+        return self.voice_convert_to_wav
 
     @property
     def TRACING_ENABLED(self) -> bool:

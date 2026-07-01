@@ -16,6 +16,12 @@ class ChatRequest(BaseModel):
     action: str | None = None
     selected_text: str | None = None
     debug: bool = False
+    input_mode: str | None = None
+    input_audio_path: str | None = None
+    input_transcript: str | None = None
+    stt_provider: str | None = None
+    stt_model: str | None = None
+    stt_latency_ms: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -58,6 +64,7 @@ class ChatResponse(BaseModel):
     message_id: str
     answer: str
     sources: list[ChatSource]
+    agent_run_id: str | None = None
     intent: str | None = None
     intent_confidence: float | None = None
     router_source: str | None = None

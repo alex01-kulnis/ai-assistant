@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,6 +45,12 @@ class AgentRun(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     model_name: Mapped[str] = mapped_column(String(length=100), nullable=False)
     retrieved_chunks_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_mode: Mapped[str | None] = mapped_column(String(length=20), nullable=True)
+    input_audio_path: Mapped[str | None] = mapped_column(String(length=500), nullable=True)
+    input_transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stt_provider: Mapped[str | None] = mapped_column(String(length=100), nullable=True)
+    stt_model: Mapped[str | None] = mapped_column(String(length=100), nullable=True)
+    stt_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

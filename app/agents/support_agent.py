@@ -4,6 +4,7 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -88,8 +89,10 @@ class SupportAgent:
         conversation_id: str | None,
         message: str,
         session: AsyncSession,
+        input_metadata: Mapping[str, Any] | None = None,
     ) -> ChatResponse:
         started_at = time.perf_counter()
+        normalized_input_metadata = self._normalize_input_metadata(input_metadata)
         with tracer.start_as_current_span("support_agent.chat") as chat_span:
             set_span_attributes(
                 chat_span,
@@ -97,6 +100,7 @@ class SupportAgent:
                     "message_length": len(message),
                     "retrieval_limit": self.retrieval_limit,
                     "model_name": self.llm_service.model_name,
+                    "input_mode": normalized_input_metadata.get("input_mode"),
                 },
             )
             with tracer.start_as_current_span("intent.classify") as span:
@@ -217,6 +221,7 @@ class SupportAgent:
                         latency_ms=self._elapsed_ms(started_at),
                         model_name=self.llm_service.model_name,
                         retrieved_chunks_count=len(retrieved_chunks),
+                        **normalized_input_metadata,
                     )
                     session.add_all([assistant_message, agent_run])
                     session.add_all(self._build_tool_call_models(agent_run.id, tool_calls))
@@ -229,6 +234,7 @@ class SupportAgent:
                             "latency_ms": agent_run.latency_ms,
                             "model_name": self.llm_service.model_name,
                             "retrieved_chunks_count": len(retrieved_chunks),
+                            "input_mode": normalized_input_metadata.get("input_mode"),
                         },
                     )
 
@@ -242,6 +248,7 @@ class SupportAgent:
                         message_id=str(assistant_message.id),
                         answer=answer,
                         sources=self._build_sources(retrieved_chunks),
+                        agent_run_id=str(agent_run.id),
                     )
             except SupportAgentError:
                 raise
@@ -258,6 +265,7 @@ class SupportAgent:
                     retrieved_chunks_count=len(retrieved_chunks),
                     tool_calls=tool_calls,
                     started_at=started_at,
+                    input_metadata=normalized_input_metadata,
                 )
                 raise SupportAgentError(f"LLM request failed: {exc}", status_code=502) from exc
             except Exception as exc:
@@ -277,6 +285,7 @@ class SupportAgent:
                     retrieved_chunks_count=len(retrieved_chunks),
                     tool_calls=tool_calls,
                     started_at=started_at,
+                    input_metadata=normalized_input_metadata,
                 )
                 if not user_message_persisted:
                     raise SupportAgentError(
@@ -355,6 +364,7 @@ class SupportAgent:
         retrieved_chunks_count: int,
         tool_calls: list[PendingToolCall],
         started_at: float,
+        input_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         await session.rollback()
         agent_run = AgentRun(
@@ -367,6 +377,7 @@ class SupportAgent:
             latency_ms=self._elapsed_ms(started_at),
             model_name=self.llm_service.model_name,
             retrieved_chunks_count=retrieved_chunks_count,
+            **self._normalize_input_metadata(input_metadata),
         )
         session.add(agent_run)
         session.add_all(self._build_tool_call_models(agent_run.id, tool_calls))
@@ -382,6 +393,7 @@ class SupportAgent:
         retrieved_chunks_count: int,
         tool_calls: list[PendingToolCall],
         started_at: float,
+        input_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         if conversation_id is None or user_message_id is None:
             await session.rollback()
@@ -396,6 +408,7 @@ class SupportAgent:
                 retrieved_chunks_count=retrieved_chunks_count,
                 tool_calls=tool_calls,
                 started_at=started_at,
+                input_metadata=input_metadata,
             )
         except Exception:
             logger.exception("Failed to save failed agent run")
@@ -506,3 +519,18 @@ class SupportAgent:
 
     def _elapsed_ms(self, started_at: float) -> int:
         return int((time.perf_counter() - started_at) * 1000)
+
+    def _normalize_input_metadata(
+        self,
+        input_metadata: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        input_metadata = input_metadata or {}
+        allowed_keys = {
+            "input_mode",
+            "input_audio_path",
+            "input_transcript",
+            "stt_provider",
+            "stt_model",
+            "stt_latency_ms",
+        }
+        return {key: input_metadata.get(key) for key in allowed_keys}
